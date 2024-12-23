@@ -16,10 +16,6 @@ RUN groupadd -r ydb && useradd --no-log-init -r -m -g ydb -G disk ydb && \
 COPY --chmod=0644 /AUTHORS /AUTHORS
 COPY --chmod=0644 /LICENSE /LICENSE
 COPY --chmod=0644 /README.md /README.md
-# dynamic libraries
-COPY --chmod=0644 /libiconv.so /lib/libiconv.so
-COPY --chmod=0644 /liblibidn-dynamic.so /lib/liblibidn-dynamic.so
-COPY --chmod=0644 /liblibaio-dynamic.so /lib/liblibaio-dynamic.so
 
 ###
 # Base image with google brekpad assets
@@ -49,6 +45,12 @@ COPY --chmod=0755 --chown=ydb /minidump_script.py /opt/ydb/bin/minidump_script.p
 # minidump init library
 COPY --link --from=breakpad-setuid /usr/lib/libbreakpad_init.so /usr/lib/libbreakpad_init.so
 
+FROM base-breakpad AS base-debug
+RUN \
+    apt-get -yqq update && \
+    apt-get -yqq install --no-install-recommends dnsutils telnet netcat-openbsd iputils-ping curl && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
 FROM base AS ydbd-setcap
 COPY --chmod=0755 --chown=ydb /ydbd /opt/ydb/bin/ydbd
 # workaround for decrease image size
@@ -58,6 +60,10 @@ RUN /sbin/setcap CAP_SYS_RAWIO=ep /opt/ydb/bin/ydbd
 # Release image
 ###
 FROM base AS release
+# dynamic libraries
+COPY --chmod=0644 /libiconv.so /lib/libiconv.so
+COPY --chmod=0644 /liblibidn-dynamic.so /lib/liblibidn-dynamic.so
+COPY --chmod=0644 /liblibaio-dynamic.so /lib/liblibaio-dynamic.so
 # ydb binaries
 COPY --chmod=0755 --chown=ydb /ydb /opt/ydb/bin/ydb
 COPY --link --from=ydbd-setcap /opt/ydb/bin/ydbd /opt/ydb/bin/ydbd
@@ -68,6 +74,10 @@ USER ydb
 # Breakpad Image
 ###
 FROM base-breakpad AS breakpad
+# dynamic libraries
+COPY --chmod=0644 /libiconv.so /lib/libiconv.so
+COPY --chmod=0644 /liblibidn-dynamic.so /lib/liblibidn-dynamic.so
+COPY --chmod=0644 /liblibaio-dynamic.so /lib/liblibaio-dynamic.so
 # ydb binaries
 COPY --chmod=0755 --chown=ydb /ydb /opt/ydb/bin/ydb
 COPY --link --from=ydbd-setcap /opt/ydb/bin/ydbd /opt/ydb/bin/ydbd
@@ -77,12 +87,15 @@ USER ydb
 ###
 # Debug Image
 ###
-FROM breakpad AS debug
-USER root
-RUN \
-    apt-get -yqq update && \
-    apt-get -yqq install --no-install-recommends dnsutils telnet netcat-openbsd iputils-ping curl && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+FROM base-debug AS debug
+# dynamic libraries
+COPY --chmod=0644 /libiconv.so /lib/libiconv.so
+COPY --chmod=0644 /liblibidn-dynamic.so /lib/liblibidn-dynamic.so
+COPY --chmod=0644 /liblibaio-dynamic.so /lib/liblibaio-dynamic.so
+# ydb binaries
+COPY --chmod=0755 --chown=ydb /ydb /opt/ydb/bin/ydb
+COPY --link --from=ydbd-setcap /opt/ydb/bin/ydbd /opt/ydb/bin/ydbd
 # debug symbols
 COPY --chmod=0644 --chown=ydb /ydbd.debug /opt/ydb/bin/ydbd.debug
+WORKDIR /opt/ydb/bin
 USER ydb
