@@ -1,25 +1,23 @@
 # -*- coding: utf-8 -*-
 
-import time
 import collections
 
 from ydb.tests.library.nemesis.nemesis_core import Nemesis, Schedule
 from ydb.tests.tools.nemesis.library import base
 
 
-class DataCenterNetworkNemesis(Nemesis, base.AbstractMonitoredNemesis):
-    def __init__(self, cluster, schedule=(300, 900), duration=60):
-        super(DataCenterNetworkNemesis, self).__init__(schedule=schedule)
+class AbstractDataCenterNemesis(Nemesis, base.AbstractMonitoredNemesis):
+    def __init__(self, cluster, schedule=(300, 900)):
+        super(AbstractDataCenterNemesis, self).__init__(schedule=schedule)
         base.AbstractMonitoredNemesis.__init__(self, scope='datacenter')
 
         self._cluster = cluster
-        self._duration = duration
-        self._current_dc = None
-        self._dc_cycle_iterator = None
-        self._dc_to_nodes = None
-        self._data_centers = None
 
-        self._restore_schedule = Schedule.from_tuple_or_int(duration)
+        self._dc_to_nodes, self._data_centers = self._validate_datacenters()
+        self._dc_cycle_iterator = self._create_dc_cycle()
+        self._current_dc = None
+
+        self._interval_schedule = Schedule.from_tuple_or_int(60)
 
     def _validate_datacenters(self, min_datacenters=2):
         dc_to_nodes = collections.defaultdict(list)
@@ -33,118 +31,50 @@ class DataCenterNetworkNemesis(Nemesis, base.AbstractMonitoredNemesis):
             return None, None
         return dc_to_nodes, data_centers
 
-    def next_schedule(self):
-        return super(DataCenterNetworkNemesis, self).next_schedule()
-
-    def prepare_state(self):
-        self.logger.info("Preparing DataCenterNetworkNemesis state...")
-        dc_to_nodes, data_centers = self._validate_datacenters(min_datacenters=2)
-        if dc_to_nodes is None or data_centers is None:
-            self.logger.warning("Found insufficient data centers. DataCenter nemesis requires multiple DCs.")
-            return
-
-        self._dc_to_nodes = dc_to_nodes
-        self._data_centers = data_centers
-        self._dc_cycle_iterator = self._create_dc_cycle()
-
     def _create_dc_cycle(self):
         while True:
             for dc in self._data_centers:
                 yield dc
 
-
-class DataCenterStopNodesNemesis(DataCenterNetworkNemesis):
-    def __init__(self, cluster, schedule=(300, 900), duration=120):
-        super(DataCenterStopNodesNemesis, self).__init__(
-            cluster, schedule=schedule, duration=duration)
-
-        self._stopped_nodes = []
-        self._stop_time = None
-
-    def _check_and_restore_nodes(self):
-        if not self._stop_time:
-            return
-
-        elapsed_time = time.time() - self._stop_time
-        if elapsed_time >= self._duration:
-            self.logger.info("Duration (%d seconds) elapsed. Restoring services in DC '%s'", self._duration, self._current_dc)
-            self.extract_fault()
-
-    def _stop_datacenter_services(self, datacenter):
-        current_dc_hosts = self._dc_to_nodes.get(datacenter, [])
-
-        if not current_dc_hosts:
-            self.logger.warning("No hosts found in data center: %s", datacenter)
-            return
-
-        self.logger.info("Stopping services in data center '%s' on %d hosts: %s", datacenter, len(current_dc_hosts), current_dc_hosts)
-
-        stopped_count = 0
-        for node_id, node in self._cluster.nodes.items():
-            if node.host in current_dc_hosts:
-                try:
-                    self.logger.info("Stopping node %d (%s) in DC %s", node_id, node.host, datacenter)
-                    node.stop()
-                    self._stopped_nodes.append((node_id, node))
-                    stopped_count += 1
-
-                except Exception as e:
-                    self.logger.error("Failed to stop node %d (%s): %s", node_id, node.host, str(e))
-
-        self.logger.info("Successfully stopped %d nodes in data center '%s'", stopped_count, datacenter)
-
     def next_schedule(self):
-        if self._stopped_nodes:
-            return next(self._restore_schedule)
-        return super(DataCenterStopNodesNemesis, self).next_schedule()
+        if self._current_dc is not None:
+            return next(self._interval_schedule)
+        return super(AbstractDataCenterNemesis, self).next_schedule()
+
+
+class DataCenterStopNodesNemesis(AbstractDataCenterNemesis):
+    def __init__(self, cluster, schedule=(300, 900), duration=120):
+        super(DataCenterStopNodesNemesis, self).__init__(cluster, schedule=schedule, duration=duration)
+        self._current_nodes = []
 
     def inject_fault(self):
-        if self._stopped_nodes:
-            self._check_and_restore_nodes()
-            return
-
-        # If preparation failed, skip fault injection
-        if self._dc_to_nodes is None or self._data_centers is None:
-            self.logger.warning("Skipping fault injection - nemesis not properly prepared")
-            return
-
-        if self._dc_cycle_iterator is None:
-            self._dc_cycle_iterator = self._create_dc_cycle()
-
         self._current_dc = next(self._dc_cycle_iterator)
-        self.logger.info("Starting fault injection in data center: %s", self._current_dc)
-
-        self._stop_datacenter_services(self._current_dc)
-
-        if self._stopped_nodes:
-            self._stop_time = time.time()
-            self.on_success_inject_fault()
+        self._current_nodes = self._dc_to_nodes.get(self._current_dc, [])
+        try:
+            for node in self._current_nodes:
+                self.logger.info("Stopping node %d on host %s", node.node_id, node.host)
+                node.stop()
+        except Exception as e:
+            self.logger.error("Failed to stop node %d on host %s: %s", node.node_id, node.host, str(e))
+            return
 
     def extract_fault(self):
-        if not self._stopped_nodes:
-            return False
+        if self._current_nodes is None or self._current_dc is None:
+            return
 
-        self.logger.info("Restoring %d stopped nodes in data center '%s'", len(self._stopped_nodes), self._current_dc)
-        restored_count = 0
-        for node_id, node in self._stopped_nodes:
-            try:
-                self.logger.info("Starting node %d (%s) in DC %s", node_id, node.host, self._current_dc)
+        try:
+            for node in self._current_nodes:
+                self.logger.info("Starting node %d on host %s", node.node_id, node.host)
                 node.start()
-                restored_count += 1
+        except Exception as e:
+            self.logger.error("Failed to start node %d on host %s: %s", node.node_id, node.host, str(e))
+            return
 
-            except Exception as e:
-                self.logger.error("Failed to start node %d (%s): %s", node_id, node.host, str(e))
-
-        self.logger.info("Successfully restored %d nodes in data center '%s'", restored_count, self._current_dc)
-
-        self._stopped_nodes = []
-        self._stop_time = None
         self._current_dc = None
+        self._current_nodes = None
 
-        return True
 
-
-class DataCenterRouteUnreachableNemesis(DataCenterNetworkNemesis):
+class DataCenterRouteUnreachableNemesis(AbstractDataCenterNemesis):
     def __init__(self, cluster, schedule=(300, 900), duration=120):
         super(DataCenterRouteUnreachableNemesis, self).__init__(
             cluster, schedule=schedule, duration=duration)
@@ -264,7 +194,7 @@ class DataCenterRouteUnreachableNemesis(DataCenterNetworkNemesis):
         return True
 
 
-class DataCenterIptablesBlockPortsNemesis(DataCenterNetworkNemesis):
+class DataCenterIptablesBlockPortsNemesis(AbstractDataCenterNemesis):
     def __init__(self, cluster, schedule=(300, 900), duration=120):
         super(DataCenterIptablesBlockPortsNemesis, self).__init__(
             cluster, schedule=schedule, duration=duration)

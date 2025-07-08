@@ -94,6 +94,8 @@ def basic_kikimr_nemesis_list(
         return nemesis_list
     nemesis_list.extend(light_nemesis_list)
     nemesis_list.extend(harmful_nemesis_list)
+    nemesis_list = []
+    nemesis_list.extend(datacenter_nemesis_list(cluster))
     return nemesis_list
 
 

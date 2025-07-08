@@ -45,6 +45,7 @@ PY_SRCS(
     predicates/hive.py
     predicates/executor.py
     nemesis/__init__.py
+    nemesis/nemesis_bridge_pile.py
     nemesis/nemesis_core.py
     nemesis/nemesis_network.py
     nemesis/nemesis_datacenter.py

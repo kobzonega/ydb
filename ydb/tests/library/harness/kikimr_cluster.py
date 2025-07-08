@@ -187,6 +187,23 @@ class ExternalKiKiMRCluster(KiKiMRClusterInterface):
 
         self._start()
 
+    def _get_bridge_pile_id(self, node):
+        if self.__yaml_config is None:
+            return None
+
+        bridge_config = self.__yaml_config.get('config', {}).get('bridge_config', None)
+        if bridge_config is None:
+            return None
+
+        bridge_pile_name = node.get('bridge_pile_name', None)
+        if bridge_pile_name is None:
+            return None
+
+        for pile_id, pile in enumerate(bridge_config.get('piles', [])):
+            if pile.get('name') == bridge_pile_name:
+                return pile_id
+        return None
+
     @property
     def nodes(self):
         return {
@@ -199,6 +216,7 @@ class ExternalKiKiMRCluster(KiKiMRClusterInterface):
                 rack=node.get('location', {}).get('rack', None),
                 datacenter=node.get('location', {}).get('data_center', None),
                 bridge_pile_name=node.get('bridge_pile_name', None),
+                bridge_pile_id=self._get_bridge_pile_id(node),
                 ssh_username=self.__ssh_username,
                 port=DEFAULT_GRPC_PORT,
                 mon_port=DEFAULT_MON_PORT,
@@ -233,6 +251,7 @@ class ExternalKiKiMRCluster(KiKiMRClusterInterface):
                         rack=node.rack,
                         datacenter=node.datacenter,
                         bridge_pile_name=node.bridge_pile_name,
+                        bridge_pile_id=node.bridge_pile_id,
                         ssh_username=self.__ssh_username,
                         port=grpc_port,
                         mon_port=mon_port,
