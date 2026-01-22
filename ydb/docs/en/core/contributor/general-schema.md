@@ -16,6 +16,30 @@ A static node configuration, which includes their complete list with the address
 
 Dynamic nodes are not known in advance and are added to the system as new processes are started. This may occur, for example, when new tenants are created in {{ ydb-short-name }} installations as a database. When a dynamic node is registered, its process first connects to one of the static nodes via gRPC, transmits information about itself through a special service called *Node Broker*, and receives a `NodeId` to use when logging into the system. The mechanism for assigning nodes is somewhat similar to DHCP in the context of distributing IP addresses.
 
+### Discovery and Node Broker {#discovery-node-broker}
+
+The diagram below shows how a dynamic node registers through Node Broker and how a client uses discovery to connect to a node. During registration, Node Broker sends a reverse request to the dynamic node to verify its availability.
+
+```mermaid
+sequenceDiagram
+  participant Dyn as Dynamic node
+  participant NB as Node Broker
+  participant Client as Client
+
+  rect rgb(234, 245, 255)
+    Dyn->>NB: RegisterNode (gRPC)
+    NB->>Dyn: Availability check (ping/check)
+    Dyn-->>NB: OK
+    NB-->>Dyn: Reply: NodeId + params
+  end
+
+  rect rgb(240, 255, 240)
+    Client->>NB: Discovery (get node endpoints)
+    NB-->>Client: List of endpoints
+    Client->>Dyn: Connect to node
+  end
+```
+
 ## Tablets {#tablets}
 
 Special microservices called *tablets* run on each node. Each tablet has a specific type and ID and is a singleton, meaning that only one tablet with a specific ID can be running in the entire cluster at any given time. A tablet can launch on any suitable node. *Generation* is an important property of a tablet that increases with each subsequent launch. Please note that the distributed nature of the system and various issues, such as network partitioning problems, may result in a situation where the same tablet is actually running on two different nodes simultaneously. However, distributed storage guarantees that only one of them will successfully complete operations that change its state and that the generation in which each successful operation runs will not decrease over time.
